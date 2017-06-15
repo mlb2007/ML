@@ -1,5 +1,5 @@
 class Foo(object):
     def bar(self):
-        return 1
+        return 2
 
 
