@@ -6,6 +6,15 @@ import os
 import hashlib
 from sklearn.model_selection import StratifiedShuffleSplit
 from pandas.plotting import scatter_matrix
+from sklearn.preprocessing import Imputer
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import Pipeline
+from sklearn.pipeline import FeatureUnion
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
 
 def func():
     pseries = pd.Series(np.random.randn(5), index=['a', 'b', 'c', 'd', 'e'])
@@ -30,6 +39,36 @@ def split_train_test_by_id(data, id_column, test_ratio, hash=hashlib.md5):
 
     return data.loc[~in_test_set], data.loc[in_test_set]
 
+
+room_index, bedroom_index, population_index, household_index = 3, 4, 5, 6
+
+
+class CustomAttributesAdder(BaseEstimator, TransformerMixin):
+    def __init__(self, add_bedrooms_per_room=True): # no *args, **kwargs
+        self.add_bedrooms_per_room = add_bedrooms_per_room
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        rooms_per_household = X[:, room_index]/X[:, household_index]
+        pop_per_household = X[:, population_index]/X[:, household_index]
+        if self.add_bedrooms_per_room:
+            bedrooms_per_room = X[:, bedroom_index]/X[:,room_index]
+            return np.c_[X, rooms_per_household, pop_per_household, bedrooms_per_room]
+        else:
+            return np.c_[X, rooms_per_household, pop_per_household]
+
+
+class PandaDataFrameSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, attributes):
+        self.attributes = attributes
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        return X[self.attributes].values
 
 # ==
 def housing_analysis():
@@ -104,6 +143,76 @@ def housing_analysis():
     # correlation again
     corr_matrix = use_data.corr()
     print corr_matrix['median_house_value'].sort_values(ascending=False)
+
+    # remove the labels (values, Y = f(X), where label means Y
+    use_data = strat_train_set.drop("median_house_value", axis=1)
+    use_data_labels = strat_train_set['median_house_value'].copy()
+
+    # cleaning N/A and other missing data
+    # use imputer
+    imputer = Imputer(strategy='median')
+
+    # drop non-numeric column
+    use_data_only = use_data.drop('ocean_proximity', axis=1)
+
+    imputer.fit(use_data_only)
+    print imputer.statistics_
+
+    npX = imputer.transform(use_data_only)
+    transformed_user_data = pd.DataFrame(npX, columns=use_data_only.columns)
+
+    # simple encoder ..
+    #encoder = LabelEncoder()
+    #use_data_oc = use_data['ocean_proximity']
+    #use_data_oc_enc = encoder.fit_transform(use_data_oc)
+    #print use_data_oc_enc
+    #print encoder.classes_
+
+    ## label binarizer
+    encoder = LabelBinarizer()
+    use_data_oc = use_data['ocean_proximity']
+    use_data_oc_enc = encoder.fit_transform(use_data_oc)
+    print use_data_oc_enc
+
+    attr_adder = CustomAttributesAdder(add_bedrooms_per_room=False)
+    data_extra_attribs = attr_adder.transform(use_data_only.values)
+    #print data_extra_attribs
+
+    attribs_selected = list(use_data_only)
+    #print attribs_selected
+    cat_attrib = ['ocean_proximity']
+
+    #panda_to_np = PandaDataFrameSelector(attribs_selected)
+    #panda_to_np_data = panda_to_np.transform(use_data_only)
+
+    data_pipe = Pipeline([('selector', PandaDataFrameSelector(attribs_selected)),
+                         ('imputer', Imputer(strategy='median')),
+                         ('attribs_adder', CustomAttributesAdder()),
+                          ('std_scaler', StandardScaler())
+                        ])
+
+    cat_pipe = Pipeline([('selector', PandaDataFrameSelector(cat_attrib)),
+                         ('label_binarizer', LabelBinarizer())])
+
+    full_pipeline = FeatureUnion(transformer_list=[('data_pipe', data_pipe),
+                                                   ('cat_pipe', cat_pipe)])
+
+    final_data = full_pipeline.fit_transform(use_data)
+    print final_data.shape
+
+    lin_reg = LinearRegression()
+    lin_reg.fit(final_data, use_data_labels)
+
+    some_data = use_data.iloc[:5]
+    some_label = use_data_labels.iloc[:5]
+    some_data_prepared = full_pipeline.transform(some_data)
+    print "Predictions:", lin_reg.predict(some_data_prepared)
+    print "Labels:", list(some_label)
+
+    housing_predicitons = lin_reg.predict(final_data)
+    lin_mse = mean_squared_error(use_data_labels, housing_predicitons)
+    lin_rmse = np.sqrt(lin_mse)
+    print "RMSE:", lin_rmse
 
 if __name__ == '__main__':
     housing_analysis()
